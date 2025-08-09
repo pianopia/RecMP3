@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>RecMP3 | １ボタン MP3 録音</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg1: #fff6fb;
+      --bg2: #f3fbff;
+      --surface: rgba(255, 255, 255, 0.75);
+      --surface-border: rgba(0, 0, 0, 0.08);
+      --primary: #7ac8ff;           /* idle */
+      --primary-strong: #4fb4ff;
+      --record: #ff8fb3;            /* rec */
+      --record-strong: #ff5f8f;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { overflow-x: hidden; }
+    body {
+      margin: 0;
+      padding: 24px;
+      padding-left: max(16px, env(safe-area-inset-left));
+      padding-right: max(16px, env(safe-area-inset-right));
+      padding-bottom: calc(24px + env(safe-area-inset-bottom));
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans JP", "Apple Color Emoji", "Segoe UI Emoji";
+      display: grid; place-items: center; min-height: 100dvh;
+      background: linear-gradient(140deg, var(--bg1), var(--bg2));
+      color: CanvasText;
+    }
+    /* 汎用リセット（メディア要素の横はみ出し防止） */
+    img, video, audio, canvas, svg, iframe { max-width: 100%; height: auto; display: block; }
+    .card {
+      width: 100%;
+      max-width: 720px;
+      margin-inline: auto;
+      border: 1px solid var(--surface-border);
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 8px 28px rgba(0,0,0,0.06);
+      background: var(--surface);
+      backdrop-filter: blur(8px);
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; text-align: center; }
+    p { margin: 0 0 12px; opacity: .8; text-align: center; }
+    .controls { display: grid; grid-template-columns: 1fr; gap: 14px; justify-items: center; width: 100%; }
+    #recordBtn {
+      appearance: none; border: 0; cursor: pointer; color: white; font-weight: 800; letter-spacing: .02em;
+      width: clamp(88px, 26vw, 140px); height: clamp(88px, 26vw, 140px);
+      border-radius: 50%;
+      background: linear-gradient(180deg, var(--primary), var(--primary-strong));
+      display: grid; place-items: center; font-size: clamp(16px, 3.4vw, 20px);
+      box-shadow: 0 6px 16px rgba(0,0,0,.10);
+      transition: transform .06s ease, background .2s ease, box-shadow .2s ease;
+      position: relative;
+      touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    }
+    #recordBtn.recording { background: linear-gradient(180deg, var(--record), var(--record-strong)); }
+    #recordBtn:active { transform: translateY(1px) scale(.99); }
+    #recordBtn::after { /* pulse ring */
+      content: ""; position: absolute; inset: -2px; border-radius: 50%;
+      box-shadow: 0 0 0 0 rgba(255,59,48,.0);
+      transition: box-shadow .3s ease;
+    }
+    #recordBtn.recording::after {
+      box-shadow: 0 0 0 8px rgba(255,95,143,.22);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 6px rgba(255,95,143,.20); }
+      70% { box-shadow: 0 0 0 14px rgba(255,95,143,.08); }
+      100% { box-shadow: 0 0 0 6px rgba(255,95,143,.20); }
+    }
+    .meter {
+      width: 100%; height: clamp(14px, 3.2vw, 18px);
+      background: rgba(0,0,0,.06);
+      border-radius: 999px; overflow: hidden; position: relative;
+    }
+    .meter > .bar { height: 100%; width: 0%; background: linear-gradient(90deg, #8ee3c3, #ffe08c, #ffa3b1); transition: width .05s linear; }
+    .statusRow { display: flex; gap: 10px; align-items: baseline; justify-content: center; }
+    #statusText { font-weight: 600; }
+    #timerText { font-variant-numeric: tabular-nums; opacity: .8; }
+    .tags { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 0; justify-content: center; }
+    .tag { font-size: 12px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.7); border: 1px solid rgba(0,0,0,.06); }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; width: 100%; }
+    audio { width: 100%; margin-top: 12px; }
+    a#download { display: none; margin-top: 8px; text-align: center; background: rgba(0,0,0,.08); color: inherit; padding: 10px 14px; border-radius: 10px; text-decoration: none; width: 100%; }
+
+    @media (min-width: 768px) {
+      .card { padding: 28px; }
+    }
+  </style>
+  <!-- OSS: MP3 エンコード用 lamejs -->
+  <script src="https://unpkg.com/lamejs@1.2.0/lame.min.js"></script>
+</head>
+<body>
+  <div class="card">
+    <h1>RecMP3</h1>
+    <p>録音ボタンを</p>
+    <div class="controls">
+      <button id="recordBtn" aria-pressed="false" aria-label="録音開始">● 録音</button>
+      <div class="meter" title="入力レベル">
+        <div class="bar" id="meterBar"></div>
+      </div>
+      <div class="statusRow">
+        <span id="statusText">待機中</span>
+        <span id="timerText" aria-live="off">00:00</span>
+      </div>
+    </div>
+    <!-- <div class="tags">
+      <span class="tag">MP3</span>
+      <span class="tag">リアルタイムハイパス/コンプレッサ/ノイズゲート</span>
+      <span class="tag">WebRTC ノイズ抑制</span>
+      <span class="tag">OSS: lamejs</span>
+    </div> -->
+
+    <div class="row">
+      <audio id="playback" controls></audio>
+    </div>
+    <a id="download" download="recording.mp3">MP3 をダウンロード</a>
+  </div>
+
+<script>
+(() => {
+  const recordBtn = document.getElementById('recordBtn');
+  const meterBar  = document.getElementById('meterBar');
+  const statusEl  = document.getElementById('statusText');
+  const playback  = document.getElementById('playback');
+  const download  = document.getElementById('download');
+  const timerEl   = document.getElementById('timerText');
+
+  /** 状態 */
+  let isRecording = false;
+  let audioContext = null;
+  let mediaStream = null;
+  let nodes = {};
+  let encoder = null;
+  let mp3Chunks = [];
+  let rafId = null;
+  let timerId = null;
+  let startMs = 0;
+  let wakeLock = null;
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function setTimer(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const ss = String(totalSec % 60).padStart(2, '0');
+    timerEl.textContent = `${mm}:${ss}`;
+  }
+
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { /* no-op */ });
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  async function releaseWakeLock() {
+    try { if (wakeLock) { await wakeLock.release(); } } catch (_) {}
+    wakeLock = null;
+  }
+
+  function dbFromRms(rms) {
+    const min = 1e-8;
+    return 20 * Math.log10(Math.max(rms, min));
+  }
+
+  function floatTo16BitPCM(float32Array) {
+    const output = new Int16Array(float32Array.length);
+    for (let i = 0; i < float32Array.length; i++) {
+      let s = Math.max(-1, Math.min(1, float32Array[i]));
+      output[i] = s < 0 ? (s * 0x8000) : (s * 0x7FFF);
+    }
+    return output;
+  }
+
+  async function startRecording() {
+    if (isRecording) return;
+
+    // 1) マイク取得（初回のみ許可を求め、2回目以降は再利用）
+    const needNewStream = !mediaStream || !mediaStream.getTracks || mediaStream.getTracks().length === 0 || mediaStream.getTracks().every(t => t.readyState !== 'live');
+    if (needNewStream) {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: { ideal: 48000 },
+          channelCount: { ideal: 1 },
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: false },
+        },
+        video: false,
+      });
+    } else {
+      // 再利用時は有効化のみ
+      mediaStream.getTracks().forEach(t => t.enabled = true);
+    }
+
+    // 2) AudioContext 構築（初回のみ作成、以降は再利用）
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    }
+    try { await audioContext.resume(); } catch(_) {}
+
+    // 3) ノード構成
+    const source = audioContext.createMediaStreamSource(mediaStream);
+
+    // ハイパス（低域ノイズ除去）
+    const highpass = audioContext.createBiquadFilter();
+    highpass.type = 'highpass';
+    highpass.frequency.value = 80;
+    highpass.Q.value = 0.707;
+
+    // コンプレッサ（小さい声を持ち上げつつ、突発的な大音量を抑制）
+    const comp = audioContext.createDynamicsCompressor();
+    comp.threshold.value = -28; // dB
+    comp.knee.value = 24;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.25;
+
+    // ノイズゲート（簡易 VAD 的に、一定以下のレベルをミュート）
+    const gateGain = audioContext.createGain();
+    gateGain.gain.value = 0.0; // 初期はクローズ
+
+    // 録音・解析用 ScriptProcessor（AudioWorklet 代替。広く動作）
+    const bufferSize = 2048; // 512/1024/2048/4096 など
+    const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+    // 無音出力（iOSで処理を継続させるため destination にゼロ出力を接続）
+    const zeroGain = audioContext.createGain();
+    zeroGain.gain.value = 0;
+
+    // 接続: source -> highpass -> comp -> gateGain -> processor -> zeroGain -> destination
+    source.connect(highpass);
+    highpass.connect(comp);
+    comp.connect(gateGain);
+    gateGain.connect(processor);
+    processor.connect(zeroGain);
+    zeroGain.connect(audioContext.destination);
+
+    // 4) lamejs MP3 エンコーダ初期化
+    const sampleRate = audioContext.sampleRate;
+    const channels = 1;
+    const kbps = 128;
+    encoder = new lamejs.Mp3Encoder(channels, sampleRate, kbps);
+    mp3Chunks = [];
+
+    // 5) ゲートしきい値など
+    const gateOpenThresholdDb = -55; // これ以上でオープン
+    const gateCloseThresholdDb = -60; // これ未満が続けばクローズ
+    let gateOpen = false;
+    let lastVoiceTime = 0;
+    const holdMs = 120; // 一度開いたら少しホールドしてバタつきを防止
+
+    // レベルメータ用
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 1024;
+    comp.connect(analyser);
+    const analyserBuffer = new Float32Array(analyser.fftSize);
+
+    function updateMeter() {
+      if (!isRecording) return;
+      analyser.getFloatTimeDomainData(analyserBuffer);
+      let sum = 0;
+      for (let i = 0; i < analyserBuffer.length; i++) {
+        const s = analyserBuffer[i]; sum += s * s;
+      }
+      const rms = Math.sqrt(sum / analyserBuffer.length);
+      const db = dbFromRms(rms);
+      const normalized = Math.min(1, Math.max(0, (db + 70) / 50)); // -70dB..-20dB を 0..1 に近似
+      meterBar.style.width = (normalized * 100).toFixed(1) + '%';
+      rafId = requestAnimationFrame(updateMeter);
+    }
+
+    // 6) 主要ループ: ゲート制御 + MP3 エンコード
+    processor.onaudioprocess = (event) => {
+      if (!isRecording) return;
+
+      // ゲート制御は gate 前（comp 出力）のレベルで判定する
+      analyser.getFloatTimeDomainData(analyserBuffer);
+      let sum = 0;
+      for (let i = 0; i < analyserBuffer.length; i++) { const s = analyserBuffer[i]; sum += s * s; }
+      const rms = Math.sqrt(sum / analyserBuffer.length);
+      const db = dbFromRms(rms);
+      const now = audioContext.currentTime * 1000;
+
+      if (gateOpen) {
+        if (db < gateCloseThresholdDb) {
+          if (now - lastVoiceTime > holdMs) {
+            gateOpen = false;
+            gateGain.gain.setTargetAtTime(0.0, audioContext.currentTime, 0.02);
+          }
+        } else {
+          lastVoiceTime = now;
+        }
+      } else {
+        if (db > gateOpenThresholdDb) {
+          gateOpen = true;
+          lastVoiceTime = now;
+          gateGain.gain.setTargetAtTime(1.0, audioContext.currentTime, 0.01);
+        }
+      }
+
+      // エンコード対象は gate 後の信号（node 接続順参照）
+      const processed = event.inputBuffer.getChannelData(0);
+      const int16 = floatTo16BitPCM(processed);
+      const mp3buf = encoder.encodeBuffer(int16);
+      if (mp3buf && mp3buf.length > 0) {
+        mp3Chunks.push(new Uint8Array(mp3buf));
+      }
+    };
+
+    // 7) 状態更新
+    nodes = { source, highpass, comp, gateGain, processor, zeroGain, analyser };
+    isRecording = true;
+    recordBtn.textContent = '■ 停止';
+    recordBtn.classList.add('recording');
+    recordBtn.ariaPressed = 'true';
+    setStatus('録音中…');
+    updateMeter();
+
+    // タイマー開始
+    startMs = Date.now();
+    if (timerId) clearInterval(timerId);
+    setTimer(0);
+    timerId = setInterval(() => setTimer(Date.now() - startMs), 500);
+
+    // ハプティクス
+    if (navigator.vibrate) { navigator.vibrate(10); }
+
+    // 画面スリープ防止
+    requestWakeLock();
+  }
+
+  async function stopRecording() {
+    if (!isRecording) return;
+    isRecording = false;
+
+    // 1) MP3 flush
+    try {
+      const flush = encoder.flush();
+      if (flush && flush.length > 0) mp3Chunks.push(new Uint8Array(flush));
+    } catch (_) {}
+
+    // 2) Blob 生成
+    const blob = new Blob(mp3Chunks, { type: 'audio/mpeg' });
+    const url = URL.createObjectURL(blob);
+
+    // 3) UI 反映
+    playback.src = url;
+    playback.style.display = 'block';
+    download.href = url;
+    download.style.display = 'inline-block';
+
+    // 4) ノード解放
+    try { cancelAnimationFrame(rafId); } catch (_) {}
+    try { nodes.processor.disconnect(); } catch (_) {}
+    try { nodes.gateGain.disconnect(); } catch (_) {}
+    try { nodes.comp.disconnect(); } catch (_) {}
+    try { nodes.highpass.disconnect(); } catch (_) {}
+    try { nodes.source.disconnect(); } catch (_) {}
+    try { nodes.zeroGain.disconnect(); } catch (_) {}
+    try { audioContext.destination && audioContext.destination.disconnect && audioContext.destination.disconnect(); } catch(_) {}
+
+    // 5) マイクは停止せず再利用（アイコンを消すため disabled にする）
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.enabled = false);
+    }
+
+    // 6) AudioContext は再利用。省電力のため一時停止
+    try { await audioContext.suspend(); } catch (_) {}
+
+    // 7) 状態更新
+    encoder = null;
+    nodes = {};
+    recordBtn.textContent = '● 録音';
+    recordBtn.classList.remove('recording');
+    recordBtn.ariaPressed = 'false';
+    setStatus('完了（再生・ダウンロードできます）');
+    if (timerId) { clearInterval(timerId); timerId = null; }
+    setTimer(0);
+
+    // ハプティクス
+    if (navigator.vibrate) { navigator.vibrate(30); }
+
+    // スリープ防止解除
+    releaseWakeLock();
+  }
+
+  recordBtn.addEventListener('click', async () => {
+    recordBtn.disabled = true;
+    try {
+      if (!isRecording) {
+        download.style.display = 'none';
+        playback.removeAttribute('src');
+        playback.load();
+        await startRecording();
+      } else {
+        await stopRecording();
+      }
+    } catch (err) {
+      console.error(err);
+      alert('録音の開始/停止に失敗しました。ブラウザの権限や別アプリの占有状況をご確認ください。');
+      setStatus('エラー');
+    } finally {
+      recordBtn.disabled = false;
+    }
+  });
+
+  // 画面が復帰した際に Wake Lock を再取得（仕様上リリースされることがある）
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && isRecording) {
+      requestWakeLock();
+    }
+  });
+})();
+</script>
+</body>
+</html>
