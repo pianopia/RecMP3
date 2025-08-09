@@ -95,9 +95,13 @@
   <script src="https://unpkg.com/lamejs@1.2.0/lame.min.js"></script>
 </head>
 <body>
-  <div class="card">
-    <h1>RecMP3</h1>
-    <p>録音ボタンを</p>
+  <header style="position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(0, 0, 0, 0.08); padding: 12px 24px;">
+    <h1 style="margin: 0; font-size: 18px; font-weight: 700; color: #333; text-align: center;">RecMP3</h1>
+  </header>
+  <div style="padding-top: 80px;">
+    <div class="card">
+      <h1>RecMP3</h1>
+      <p>録音ボタンを押すと録音が始まります</p>
     <div class="controls">
       <button id="recordBtn" aria-pressed="false" aria-label="録音開始">● 録音</button>
       <div class="meter" title="入力レベル">
@@ -108,12 +112,6 @@
         <span id="timerText" aria-live="off">00:00</span>
       </div>
     </div>
-    <!-- <div class="tags">
-      <span class="tag">MP3</span>
-      <span class="tag">リアルタイムハイパス/コンプレッサ/ノイズゲート</span>
-      <span class="tag">WebRTC ノイズ抑制</span>
-      <span class="tag">OSS: lamejs</span>
-    </div> -->
 
     <div class="row">
       <audio id="playback" controls></audio>
